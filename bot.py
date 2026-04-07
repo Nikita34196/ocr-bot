@@ -18,38 +18,37 @@ def get_client():
 
 # ─── Режимы распознавания ─────────────────────────────────────────────────────
 
+STRICT_RULES = """
+CRITICAL TRANSCRIPTION RULES — follow strictly:
+1. Transcribe EVERY word EXACTLY as written/printed — do not paraphrase, do not correct, do not substitute
+2. Do NOT add words that are not in the image
+3. Do NOT change any word to a "more logical" alternative
+4. Do NOT correct grammar or spelling mistakes — copy them as-is
+5. If a word is unclear, write your best attempt followed by [?]
+6. Preserve original language (Russian/English/etc) exactly as written
+7. Preserve numbering, dates, underlines, structure as they appear
+"""
+
 MODES = {
     'auto': {
         'name': '🔍 Авто',
-        'system': "You are an expert OCR system for a visually impaired user (legally blind). Transcribe all text exactly as it appears.",
-        'prompt': """Transcribe all text from this image/document exactly as it appears.
-Read every word carefully, preserve the original language and spelling.
-Output only the transcribed text, no commentary."""
+        'system': "You are an expert OCR system for a visually impaired user (legally blind). Your only job is to transcribe text exactly as it appears — never interpret, never correct, never substitute words.",
+        'prompt': STRICT_RULES + "\nNow transcribe all text from this image exactly as it appears."
     },
     'handwritten': {
         'name': '✍️ Рукописный',
-        'system': "You are an expert at reading handwritten text for a visually impaired user (legally blind). You excel at deciphering handwriting, including difficult cursive and old-style writing.",
-        'prompt': """This image contains handwritten text. Please read it very carefully.
-Pay close attention to each letter and word, even if the handwriting is difficult.
-Transcribe every word exactly as written, preserving the original language, spelling and punctuation.
-If a word is unclear, make your best guess and mark it with [?].
-Output only the transcribed text."""
+        'system': "You are an expert forensic handwriting transcriptionist helping a legally blind user. Your only job is to transcribe handwriting exactly as written — never interpret, never correct, never substitute words.",
+        'prompt': STRICT_RULES + "\nThis image contains handwritten text. Transcribe every word exactly as written."
     },
     'printed': {
         'name': '📄 Печатный',
-        'system': "You are an expert OCR system for a visually impaired user (legally blind). You specialize in transcribing printed and typewritten documents.",
-        'prompt': """This image contains printed/typewritten text. Transcribe it exactly as it appears.
-Preserve the original structure — paragraphs, line breaks, lists, numbering.
-If text is in multiple columns, read left column first, then right column.
-Output only the transcribed text, no Markdown formatting."""
+        'system': "You are an expert OCR system for a visually impaired user (legally blind). Your only job is to transcribe printed text exactly as it appears — never interpret, never correct, never substitute words.",
+        'prompt': STRICT_RULES + "\nThis image contains printed/typewritten text. If text is in multiple columns, read left column first, then right. Transcribe exactly as it appears."
     },
     'mixed': {
         'name': '📝 Смешанный',
-        'system': "You are an expert OCR system for a visually impaired user (legally blind). You can handle both printed and handwritten text.",
-        'prompt': """This image may contain both printed and handwritten text.
-Transcribe everything you see — printed text, handwritten notes, annotations, marginalia.
-Mark handwritten parts with [рукопись: текст] if needed for clarity.
-Output all transcribed text in reading order."""
+        'system': "You are an expert OCR system for a visually impaired user (legally blind). Your only job is to transcribe all text exactly as it appears — never interpret, never correct, never substitute words.",
+        'prompt': STRICT_RULES + "\nThis image may contain both printed and handwritten text. Transcribe everything in reading order. Mark handwritten parts with [рукопись: текст] if needed."
     }
 }
 
