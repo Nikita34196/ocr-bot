@@ -18,37 +18,26 @@ def get_client():
 
 # ─── Режимы распознавания ─────────────────────────────────────────────────────
 
-STRICT_RULES = """
-CRITICAL TRANSCRIPTION RULES — follow strictly:
-1. Transcribe EVERY word EXACTLY as written/printed — do not paraphrase, do not correct, do not substitute
-2. Do NOT add words that are not in the image
-3. Do NOT change any word to a "more logical" alternative
-4. Do NOT correct grammar or spelling mistakes — copy them as-is
-5. If a word is unclear, write your best attempt followed by [?]
-6. Preserve original language (Russian/English/etc) exactly as written
-7. Preserve numbering, dates, underlines, structure as they appear
-"""
-
 MODES = {
     'auto': {
         'name': '🔍 Авто',
-        'system': "You are an expert OCR system for a visually impaired user (legally blind). Your only job is to transcribe text exactly as it appears — never interpret, never correct, never substitute words.",
-        'prompt': STRICT_RULES + "\nNow transcribe all text from this image exactly as it appears."
+        'system': "You are an OCR tool for a blind user. Transcribe text from images exactly as it appears.",
+        'prompt': "Transcribe all text from this image exactly as it appears, word for word. Output only the text."
     },
     'handwritten': {
         'name': '✍️ Рукописный',
-        'system': "You are an expert forensic handwriting transcriptionist helping a legally blind user. Your only job is to transcribe handwriting exactly as written — never interpret, never correct, never substitute words.",
-        'prompt': STRICT_RULES + "\nThis image contains handwritten text. Transcribe every word exactly as written."
+        'system': "You are an OCR tool for a blind user. Transcribe handwritten text exactly as written.",
+        'prompt': "Transcribe all handwritten text from this image exactly as written, word for word. Output only the text."
     },
     'printed': {
         'name': '📄 Печатный',
-        'system': "You are an expert OCR system for a visually impaired user (legally blind). Your only job is to transcribe printed text exactly as it appears — never interpret, never correct, never substitute words.",
-        'prompt': STRICT_RULES + "\nThis image contains printed/typewritten text. If text is in multiple columns, read left column first, then right. Transcribe exactly as it appears."
+        'system': "You are an OCR tool for a blind user. Transcribe printed text exactly as it appears.",
+        'prompt': "Transcribe all printed text from this image exactly as it appears, word for word. If multiple columns, left column first. Output only the text."
     },
     'mixed': {
         'name': '📝 Смешанный',
-        'system': "You are an expert OCR system for a visually impaired user (legally blind). Your only job is to transcribe all text exactly as it appears — never interpret, never correct, never substitute words.",
-        'prompt': STRICT_RULES + "\nThis image may contain both printed and handwritten text. Transcribe everything in reading order. Mark handwritten parts with [рукопись: текст] if needed."
+        'system': "You are an OCR tool for a blind user. Transcribe all text exactly as it appears.",
+        'prompt': "Transcribe all text from this image exactly as it appears, word for word, in reading order. Output only the text."
     }
 }
 
