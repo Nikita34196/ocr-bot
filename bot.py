@@ -8,7 +8,7 @@ import urllib.request
 BOT_TOKEN  = os.environ['BOT_TOKEN']
 ADMIN_ID   = int(os.environ.get('ADMIN_ID', '0'))
 GEMINI_KEY = os.environ.get('GEMINI_KEY', '')
-GEMINI_MODEL = 'gemini-2.0-flash'
+GEMINI_MODEL = 'gemini-1.5-flash'
 
 bot = telebot.TeleBot(BOT_TOKEN)
 bot.remove_webhook()
