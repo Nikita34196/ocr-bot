@@ -14,10 +14,14 @@ bot.remove_webhook()
 def get_best_model():
     """Автоматически выбирает лучшую доступную модель."""
     models_to_try = [
+        'gemini-3.0-ultra',
+        'gemini-3.0-pro',
+        'gemini-3.0-flash',
+        'gemini-2.5-pro',
         'gemini-2.5-pro-preview-05-06',
+        'gemini-2.5-flash',
         'gemini-2.5-flash-preview-04-17',
         'gemini-2.0-flash',
-        'gemini-1.5-pro',
         'gemini-1.5-flash',
     ]
     for model in models_to_try:
