@@ -1,17 +1,17 @@
 import telebot
-import google.generativeai as genai
 import base64
 import os
 import io
+import json
+import urllib.request
 
-BOT_TOKEN = os.environ['BOT_TOKEN']
-ADMIN_ID  = int(os.environ.get('ADMIN_ID', '0'))
+BOT_TOKEN  = os.environ['BOT_TOKEN']
+ADMIN_ID   = int(os.environ.get('ADMIN_ID', '0'))
 GEMINI_KEY = os.environ.get('GEMINI_KEY', '')
+GEMINI_MODEL = 'gemini-2.0-flash'
 
 bot = telebot.TeleBot(BOT_TOKEN)
 bot.remove_webhook()
-
-genai.configure(api_key=GEMINI_KEY)
 
 MODES = {
     'auto': {
@@ -118,20 +118,42 @@ def send_result(message, text, orig_filename):
         send_long(message.chat.id, text)
 
 def recognize(file_data, mime_type, mode):
-    model = genai.GenerativeModel('gemini-2.0-flash')
     prompt = MODES[mode]['prompt']
+    file_b64 = base64.standard_b64encode(file_data).decode('utf-8')
 
-    response = model.generate_content(
-        [{'mime_type': mime_type, 'data': file_data}, prompt],
-        safety_settings=[
-            {'category': 'HARM_CATEGORY_HARASSMENT',        'threshold': 'BLOCK_NONE'},
-            {'category': 'HARM_CATEGORY_HATE_SPEECH',       'threshold': 'BLOCK_NONE'},
-            {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
-            {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'},
+    body = {
+        "contents": [{"parts": [
+            {"inline_data": {"mime_type": mime_type, "data": file_b64}},
+            {"text": prompt}
+        ]}],
+        "generationConfig": {"maxOutputTokens": 4096},
+        "safetySettings": [
+            {"category": "HARM_CATEGORY_HARASSMENT",        "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH",       "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_CIVIC_INTEGRITY",   "threshold": "BLOCK_NONE"}
         ]
+    }
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_KEY}"
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode('utf-8'),
+        headers={'Content-Type': 'application/json'},
+        method='POST'
     )
-    text = response.text.strip()
-    return text.replace('^', '')
+
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        result = json.loads(resp.read().decode('utf-8'))
+
+    try:
+        text = result['candidates'][0]['content']['parts'][0]['text'].strip()
+        return text.replace('^', '')
+    except (KeyError, IndexError):
+        candidate = result.get('candidates', [{}])[0]
+        finish_reason = candidate.get('finishReason', 'UNKNOWN')
+        raise Exception(f"Не удалось распознать (причина: {finish_reason})")
 
 @bot.message_handler(content_types=['photo', 'document'])
 def handle_file(message):
