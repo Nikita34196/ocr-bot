@@ -1,2 +1,2 @@
-anthropic
 pyTelegramBotAPI
+google-generativeai
