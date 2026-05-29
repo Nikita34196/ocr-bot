@@ -8,10 +8,30 @@ import urllib.request
 BOT_TOKEN  = os.environ['BOT_TOKEN']
 ADMIN_ID   = int(os.environ.get('ADMIN_ID', '0'))
 GEMINI_KEY = os.environ.get('GEMINI_KEY', '')
-GEMINI_MODEL = 'gemini-1.5-flash'
-
 bot = telebot.TeleBot(BOT_TOKEN)
 bot.remove_webhook()
+
+def get_best_model():
+    """Автоматически выбирает лучшую доступную модель."""
+    models_to_try = [
+        'gemini-2.5-pro-preview-05-06',
+        'gemini-2.5-flash-preview-04-17',
+        'gemini-2.0-flash',
+        'gemini-1.5-pro',
+        'gemini-1.5-flash',
+    ]
+    for model in models_to_try:
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}?key={GEMINI_KEY}"
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                if resp.status == 200:
+                    print(f"Используем модель: {model}")
+                    return model
+        except Exception:
+            continue
+    return 'gemini-1.5-flash'
+
+GEMINI_MODEL = get_best_model()
 
 MODES = {
     'auto': {
