@@ -5,10 +5,20 @@ import io
 import json
 import urllib.request
 
-BOT_TOKEN     = os.environ['BOT_TOKEN']
-ADMIN_ID      = int(os.environ.get('ADMIN_ID', '0'))
+BOT_TOKEN      = os.environ['BOT_TOKEN']
+ADMIN_ID       = int(os.environ.get('ADMIN_ID', '0'))
 OPENROUTER_KEY = os.environ.get('OPENROUTER_KEY', '')
-MODEL         = 'google/gemini-3-flash-preview'
+
+MODELS = {
+    'gemini-3.5-flash':  'google/gemini-3.5-flash',
+    'gemini-3.1-pro':    'google/gemini-3.1-pro-preview',
+    'gemini-3-pro':      'google/gemini-3-pro-preview',
+    'gemini-3-flash':    'google/gemini-3-flash-preview',
+    'gemini-2.5-pro':    'google/gemini-2.5-pro-preview',
+    'gemini-2.5-flash':  'google/gemini-2.5-flash-preview-04-17',
+    'gemini-2.0-flash':  'google/gemini-2.0-flash-001',
+}
+DEFAULT_MODEL = 'gemini-3.5-flash'
 
 bot = telebot.TeleBot(BOT_TOKEN)
 bot.remove_webhook()
@@ -34,21 +44,30 @@ MODES = {
 
 user_modes   = {}
 user_formats = {}
+user_models  = {}
+
+# ─── Команды ──────────────────────────────────────────────────────────────────
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     bot.reply_to(message,
         "👋 Привет! Отправь мне фото или PDF.\n\n"
+        "/model — выбор модели\n"
         "/mode — режим распознавания\n"
         "/format — формат ответа\n"
-        "/model — текущая модель\n"
         "/status — статус (только админ)\n\n"
         "⚠️ Максимальный размер файла: 20MB"
     )
 
 @bot.message_handler(commands=['model'])
 def show_model(message):
-    bot.reply_to(message, f"🤖 Модель: `{MODEL}`", parse_mode='Markdown')
+    uid = message.from_user.id
+    current = user_models.get(uid, DEFAULT_MODEL)
+    markup = telebot.types.InlineKeyboardMarkup()
+    for name in MODELS:
+        label = ("✅ " if name == current else "") + name
+        markup.add(telebot.types.InlineKeyboardButton(label, callback_data="mdl_" + name))
+    bot.reply_to(message, "Текущая модель: " + current + "\nВыберите:", reply_markup=markup)
 
 @bot.message_handler(commands=['mode'])
 def show_mode(message):
@@ -62,7 +81,7 @@ def show_mode(message):
         telebot.types.InlineKeyboardButton("📝 Смешанный",  callback_data='mode_mixed'),
     )
     current = user_modes.get(message.from_user.id, 'auto')
-    bot.reply_to(message, f"Текущий режим: {MODES[current]['name']}\nВыберите режим:", reply_markup=markup)
+    bot.reply_to(message, "Текущий режим: " + MODES[current]['name'] + "\nВыберите:", reply_markup=markup)
 
 @bot.message_handler(commands=['format'])
 def show_format(message):
@@ -80,22 +99,31 @@ def show_status(message):
         return
     key = OPENROUTER_KEY
     masked = key[:12] + '...' + key[-4:] if len(key) > 16 else '❌ не задан'
-    bot.reply_to(message, f"✅ Бот работает\n🔑 Ключ: `{masked}`\n🤖 Модель: `{MODEL}`", parse_mode='Markdown')
+    bot.reply_to(message, "✅ Бот работает\nКлюч: " + masked)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith('mdl_'))
+def handle_model(call):
+    name = call.data.replace('mdl_', '')
+    user_models[call.from_user.id] = name
+    bot.answer_callback_query(call.id, "Модель: " + name)
+    bot.edit_message_text("✅ Модель: " + name, call.message.chat.id, call.message.message_id)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith('mode_'))
 def handle_mode(call):
     mode = call.data.replace('mode_', '')
     user_modes[call.from_user.id] = mode
-    bot.answer_callback_query(call.id, f"Режим: {MODES[mode]['name']}")
-    bot.edit_message_text(f"✅ Режим: {MODES[mode]['name']}", call.message.chat.id, call.message.message_id)
+    bot.answer_callback_query(call.id, "Режим: " + MODES[mode]['name'])
+    bot.edit_message_text("✅ Режим: " + MODES[mode]['name'], call.message.chat.id, call.message.message_id)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith('fmt_'))
 def handle_format(call):
     fmt = call.data.replace('fmt_', '')
     user_formats[call.from_user.id] = fmt
     names = {'text': '💬 Текст', 'txt': '📝 TXT файл'}
-    bot.answer_callback_query(call.id, f"Формат: {names[fmt]}")
-    bot.edit_message_text(f"✅ Формат: {names[fmt]}", call.message.chat.id, call.message.message_id)
+    bot.answer_callback_query(call.id, "Формат: " + names[fmt])
+    bot.edit_message_text("✅ Формат: " + names[fmt], call.message.chat.id, call.message.message_id)
+
+# ─── Обработка файлов ─────────────────────────────────────────────────────────
 
 SUPPORTED_EXTENSIONS = {'.pdf', '.jpg', '.jpeg', '.png'}
 MAX_FILE_SIZE = 20 * 1024 * 1024
@@ -109,24 +137,23 @@ def send_result(message, text, orig_filename):
     base_name = os.path.splitext(orig_filename)[0] if orig_filename else 'result'
     if fmt == 'txt':
         buf = io.BytesIO(text.encode('utf-8'))
-        bot.send_document(message.chat.id, buf, visible_file_name=f"{base_name}_text.txt")
+        bot.send_document(message.chat.id, buf, visible_file_name=base_name + '_text.txt')
     else:
         send_long(message.chat.id, text)
 
-def recognize(file_data, mime_type, mode):
+def recognize(file_data, mime_type, mode, model_id):
     file_b64 = base64.standard_b64encode(file_data).decode('utf-8')
     prompt = MODES[mode]['prompt']
 
-    # OpenRouter использует формат OpenAI
     body = {
-        "model": MODEL,
+        "model": model_id,
         "max_tokens": 4096,
         "messages": [{
             "role": "user",
             "content": [
                 {
                     "type": "image_url",
-                    "image_url": {"url": f"data:{mime_type};base64,{file_b64}"}
+                    "image_url": {"url": "data:" + mime_type + ";base64," + file_b64}
                 },
                 {"type": "text", "text": prompt}
             ]
@@ -138,7 +165,7 @@ def recognize(file_data, mime_type, mode):
         data=json.dumps(body).encode('utf-8'),
         headers={
             'Content-Type': 'application/json',
-            'Authorization': f'Bearer {OPENROUTER_KEY}',
+            'Authorization': 'Bearer ' + OPENROUTER_KEY,
             'HTTP-Referer': 'https://github.com/Nikita34196/ocr-bot',
             'X-Title': 'OCR Bot'
         },
@@ -150,7 +177,7 @@ def recognize(file_data, mime_type, mode):
             result = json.loads(resp.read().decode('utf-8'))
             return result['choices'][0]['message']['content'].strip()
     except urllib.error.HTTPError as e:
-        raise Exception(f"HTTP {e.code}: {e.read().decode('utf-8')[:200]}")
+        raise Exception("HTTP " + str(e.code) + ": " + e.read().decode('utf-8')[:200])
 
 @bot.message_handler(content_types=['photo', 'document'])
 def handle_file(message):
@@ -168,7 +195,7 @@ def handle_file(message):
             orig_filename = doc.file_name
             ext = os.path.splitext(doc.file_name)[1].lower()
             if ext not in SUPPORTED_EXTENSIONS:
-                bot.send_message(message.chat.id, f"❌ Формат «{ext}» не поддерживается.")
+                bot.send_message(message.chat.id, "❌ Формат не поддерживается.")
                 return
             if doc.file_size and doc.file_size > MAX_FILE_SIZE:
                 bot.send_message(message.chat.id, "❌ Файл слишком большой. Максимум: 20MB")
@@ -181,10 +208,13 @@ def handle_file(message):
             )
 
         mode = user_modes.get(message.from_user.id, 'auto')
-        bot.send_message(message.chat.id, f"⏳ Распознаю текст ({MODES[mode]['name']})...")
+        model_name = user_models.get(message.from_user.id, DEFAULT_MODEL)
+        model_id = MODELS.get(model_name, MODELS[DEFAULT_MODEL])
+
+        bot.send_message(message.chat.id, "⏳ Распознаю текст (" + MODES[mode]['name'] + " / " + model_name + ")...")
 
         file_data = bot.download_file(file_info.file_path)
-        result = recognize(file_data, mime_type, mode)
+        result = recognize(file_data, mime_type, mode, model_id)
 
         if not result:
             bot.send_message(message.chat.id, "⚠️ Не удалось распознать текст.")
@@ -193,7 +223,7 @@ def handle_file(message):
         send_result(message, result, orig_filename)
 
     except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Ошибка: {e}")
+        bot.send_message(message.chat.id, "❌ Ошибка: " + str(e))
 
-print(f"Бот запущен на OpenRouter ({MODEL})!")
+print("Бот запущен на OpenRouter!")
 bot.polling(none_stop=True, interval=1, timeout=30)
