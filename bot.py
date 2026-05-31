@@ -1,20 +1,17 @@
 import telebot
-import anthropic
 import base64
 import os
 import io
+import json
+import urllib.request
 
-BOT_TOKEN  = os.environ['BOT_TOKEN']
-ADMIN_ID   = int(os.environ.get('ADMIN_ID', '0'))
+BOT_TOKEN     = os.environ['BOT_TOKEN']
+ADMIN_ID      = int(os.environ.get('ADMIN_ID', '0'))
+OPENROUTER_KEY = os.environ.get('OPENROUTER_KEY', '')
+MODEL         = 'google/gemini-2.5-pro-preview'
 
 bot = telebot.TeleBot(BOT_TOKEN)
 bot.remove_webhook()
-
-def get_client():
-    key = os.environ.get('ANTHROPIC_KEY', '')
-    if not key:
-        raise ValueError("API ключ не установлен.")
-    return anthropic.Anthropic(api_key=key)
 
 MODES = {
     'auto': {
@@ -51,7 +48,7 @@ def send_welcome(message):
 
 @bot.message_handler(commands=['model'])
 def show_model(message):
-    bot.reply_to(message, "🤖 Модель: `claude-sonnet-4-20250514`", parse_mode='Markdown')
+    bot.reply_to(message, f"🤖 Модель: `{MODEL}`", parse_mode='Markdown')
 
 @bot.message_handler(commands=['mode'])
 def show_mode(message):
@@ -81,9 +78,9 @@ def show_status(message):
     if message.from_user.id != ADMIN_ID:
         bot.reply_to(message, "⛔️ Нет доступа.")
         return
-    key = os.environ.get('ANTHROPIC_KEY', '')
+    key = OPENROUTER_KEY
     masked = key[:12] + '...' + key[-4:] if len(key) > 16 else '❌ не задан'
-    bot.reply_to(message, f"✅ Бот работает\n🔑 Ключ: `{masked}`", parse_mode='Markdown')
+    bot.reply_to(message, f"✅ Бот работает\n🔑 Ключ: `{masked}`\n🤖 Модель: `{MODEL}`", parse_mode='Markdown')
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith('mode_'))
 def handle_mode(call):
@@ -115,6 +112,45 @@ def send_result(message, text, orig_filename):
         bot.send_document(message.chat.id, buf, visible_file_name=f"{base_name}_text.txt")
     else:
         send_long(message.chat.id, text)
+
+def recognize(file_data, mime_type, mode):
+    file_b64 = base64.standard_b64encode(file_data).decode('utf-8')
+    prompt = MODES[mode]['prompt']
+
+    # OpenRouter использует формат OpenAI
+    body = {
+        "model": MODEL,
+        "max_tokens": 4096,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime_type};base64,{file_b64}"}
+                },
+                {"type": "text", "text": prompt}
+            ]
+        }]
+    }
+
+    req = urllib.request.Request(
+        "https://openrouter.ai/api/v1/chat/completions",
+        data=json.dumps(body).encode('utf-8'),
+        headers={
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {OPENROUTER_KEY}',
+            'HTTP-Referer': 'https://github.com/Nikita34196/ocr-bot',
+            'X-Title': 'OCR Bot'
+        },
+        method='POST'
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            result = json.loads(resp.read().decode('utf-8'))
+            return result['choices'][0]['message']['content'].strip()
+    except urllib.error.HTTPError as e:
+        raise Exception(f"HTTP {e.code}: {e.read().decode('utf-8')[:200]}")
 
 @bot.message_handler(content_types=['photo', 'document'])
 def handle_file(message):
@@ -148,38 +184,16 @@ def handle_file(message):
         bot.send_message(message.chat.id, f"⏳ Распознаю текст ({MODES[mode]['name']})...")
 
         file_data = bot.download_file(file_info.file_path)
-        file_b64 = base64.standard_b64encode(file_data).decode('utf-8')
+        result = recognize(file_data, mime_type, mode)
 
-        content_block = {
-            "type": "document" if mime_type == 'application/pdf' else "image",
-            "source": {"type": "base64", "media_type": mime_type, "data": file_b64}
-        }
-
-        client = get_client()
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=4096,
-            messages=[{"role": "user", "content": [
-                content_block,
-                {"type": "text", "text": MODES[mode]['prompt']}
-            ]}]
-        )
-
-        result = response.content[0].text.strip()
         if not result:
             bot.send_message(message.chat.id, "⚠️ Не удалось распознать текст.")
             return
 
         send_result(message, result, orig_filename)
 
-    except ValueError as e:
-        bot.send_message(message.chat.id, f"⚠️ {e}")
-    except anthropic.AuthenticationError:
-        bot.send_message(message.chat.id, "❌ Неверный API ключ.")
-    except anthropic.RateLimitError:
-        bot.send_message(message.chat.id, "❌ Превышен лимит запросов. Попробуйте через минуту.")
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ Ошибка: {e}")
 
-print("Бот запущен на Claude!")
+print(f"Бот запущен на OpenRouter ({MODEL})!")
 bot.polling(none_stop=True, interval=1, timeout=30)
