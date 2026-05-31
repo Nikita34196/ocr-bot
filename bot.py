@@ -7,7 +7,7 @@ import urllib.request
 
 BOT_TOKEN      = os.environ['BOT_TOKEN']
 ADMIN_ID       = int(os.environ.get('ADMIN_ID', '0'))
-OPENROUTER_KEY = os.environ.get('OPENROUTER_KEY', '')
+OPENROUTER_KEY = os.environ.get('OPENROUTER_KEY', '').strip()
 
 MODELS = {
     'gemini-3.5-flash':  'google/gemini-3.5-flash',
@@ -22,6 +22,7 @@ DEFAULT_MODEL = 'gemini-3.5-flash'
 
 bot = telebot.TeleBot(BOT_TOKEN)
 bot.remove_webhook()
+print(f'OPENROUTER_KEY set: {bool(OPENROUTER_KEY)}, length: {len(OPENROUTER_KEY)}')
 
 MODES = {
     'auto': {
