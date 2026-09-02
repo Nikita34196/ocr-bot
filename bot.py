@@ -3,6 +3,7 @@ import base64
 import os
 import io
 import json
+import re
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -10,18 +11,108 @@ import urllib.parse
 BOT_TOKEN  = os.environ['BOT_TOKEN']
 ADMIN_ID   = int(os.environ.get('ADMIN_ID', '0'))
 GEMINI_KEY = os.environ.get('GEMINI_KEY', '').strip()
+GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta'
 
-MODELS = {
-    'gemini-2.5-flash': 'gemini-2.5-flash',
-    'gemini-2.5-pro':   'gemini-2.5-pro',
-    'gemini-2.0-flash': 'gemini-2.0-flash',
-    'gemini-1.5-flash': 'gemini-1.5-flash',
-}
-DEFAULT_MODEL = 'gemini-2.5-flash'
+SKIP_SUBSTR = (
+    'embedding', 'imagen', 'veo', 'tts', 'live', 'transcribe', 'image',
+    'robotics', 'gemma', 'computer', 'aqa', 'learnlm', 'omni', 'audio',
+    'cyber', 'code-assist',
+)
+
+FALLBACK_MODELS = [
+    'gemini-3.8-flash',
+    'gemini-3.7-flash',
+    'gemini-3.6-flash',
+    'gemini-3.5-flash',
+    'gemini-3.5-flash-lite',
+    'gemini-3.1-pro-preview',
+    'gemini-3-flash-preview',
+    'gemini-2.5-flash',
+    'gemini-2.5-pro',
+]
 
 bot = telebot.TeleBot(BOT_TOKEN)
 bot.remove_webhook()
 print(f'GEMINI_KEY set: {bool(GEMINI_KEY)}, length: {len(GEMINI_KEY)}')
+
+def gemini_url(path, extra=None):
+    params = {'key': GEMINI_KEY}
+    if extra:
+        params.update(extra)
+    return GEMINI_API + '/' + path + '?' + urllib.parse.urlencode(params)
+
+def model_sort_key(name):
+    m = re.match(r'gemini-(\d+)(?:\.(\d+))?(?:\.(\d+))?', name)
+    major = int(m.group(1)) if m else 0
+    minor = int(m.group(2)) if m and m.group(2) else 0
+    patch = int(m.group(3)) if m and m.group(3) else 0
+    if 'flash-lite' in name:
+        family = 1
+    elif 'flash' in name:
+        family = 3
+    elif 'pro' in name:
+        family = 2
+    else:
+        family = 0
+    stable = 0 if ('preview' in name or '-exp' in name) else 1
+    undated = 0 if re.search(r'-\d{2}-\d{2}', name) else 1
+    return (major, minor, patch, family, stable, undated, name)
+
+def is_ocr_model(name, methods):
+    if methods and 'generateContent' not in methods:
+        return False
+    n = name.lower()
+    if not n.startswith('gemini-'):
+        return False
+    if any(s in n for s in SKIP_SUBSTR):
+        return False
+    return 'flash' in n or 'pro' in n
+
+def fetch_available_models():
+    names = []
+    page_token = None
+    try:
+        while True:
+            extra = {'pageSize': '100'}
+            if page_token:
+                extra['pageToken'] = page_token
+            req = urllib.request.Request(gemini_url('models', extra), method='GET')
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+            for item in data.get('models', []):
+                raw = item.get('name', '')
+                name = raw.split('/')[-1]
+                methods = item.get('supportedGenerationMethods', [])
+                if is_ocr_model(name, methods):
+                    names.append(name)
+            page_token = data.get('nextPageToken')
+            if not page_token:
+                break
+    except Exception as e:
+        print('Не удалось получить список моделей Gemini:', e)
+        return list(FALLBACK_MODELS)
+
+    cleaned = []
+    seen = set()
+    for name in names:
+        base = re.sub(r'-00\d$', '', name)
+        if base in seen:
+            continue
+        seen.add(base)
+        cleaned.append(base)
+    cleaned.sort(key=model_sort_key, reverse=True)
+    return cleaned or list(FALLBACK_MODELS)
+
+def pick_latest_flash(models):
+    for name in models:
+        if 'flash' in name and 'lite' not in name:
+            return name
+    return models[0] if models else FALLBACK_MODELS[0]
+
+AVAILABLE_MODELS = fetch_available_models()
+DEFAULT_MODEL = pick_latest_flash(AVAILABLE_MODELS)
+print('Доступные модели:', ', '.join(AVAILABLE_MODELS[:12]))
+print('Автомодель:', DEFAULT_MODEL)
 
 MODES = {
     'auto': {
@@ -61,13 +152,19 @@ def send_welcome(message):
 
 @bot.message_handler(commands=['model'])
 def show_model(message):
+    global AVAILABLE_MODELS, DEFAULT_MODEL
+    AVAILABLE_MODELS = fetch_available_models()
+    DEFAULT_MODEL = pick_latest_flash(AVAILABLE_MODELS)
     uid = message.from_user.id
-    current = user_models.get(uid, DEFAULT_MODEL)
+    current = user_models.get(uid, 'auto')
     markup = telebot.types.InlineKeyboardMarkup()
-    for name in MODELS:
+    auto_label = ("✅ " if current == 'auto' else "") + "Авто (" + DEFAULT_MODEL + ")"
+    markup.add(telebot.types.InlineKeyboardButton(auto_label, callback_data="mdl_auto"))
+    for name in AVAILABLE_MODELS[:16]:
         label = ("✅ " if name == current else "") + name
         markup.add(telebot.types.InlineKeyboardButton(label, callback_data="mdl_" + name))
-    bot.reply_to(message, "Текущая модель: " + current + "\nВыберите:", reply_markup=markup)
+    shown = DEFAULT_MODEL if current == 'auto' else current
+    bot.reply_to(message, "Сейчас: " + shown + "\nАвтоподключение к самой свежей Flash.\nВыберите:", reply_markup=markup)
 
 @bot.message_handler(commands=['mode'])
 def show_mode(message):
@@ -99,14 +196,30 @@ def show_status(message):
         return
     key = GEMINI_KEY
     masked = key[:8] + '...' + key[-4:] if len(key) > 12 else '❌ не задан'
-    bot.reply_to(message, "✅ Бот работает на Gemini\nКлюч: " + masked)
+    bot.reply_to(
+        message,
+        "✅ Бот работает на Gemini\nКлюч: " + masked +
+        "\nАвтомодель: " + DEFAULT_MODEL +
+        "\nМоделей: " + str(len(AVAILABLE_MODELS))
+    )
+
+def resolve_model(uid):
+    name = user_models.get(uid, 'auto')
+    if name == 'auto' or name not in AVAILABLE_MODELS:
+        return DEFAULT_MODEL
+    return name
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith('mdl_'))
 def handle_model(call):
-    name = call.data.replace('mdl_', '')
+    name = call.data.replace('mdl_', '', 1)
+    if name != 'auto' and name not in AVAILABLE_MODELS:
+        bot.answer_callback_query(call.id, "Модель недоступна")
+        return
     user_models[call.from_user.id] = name
-    bot.answer_callback_query(call.id, "Модель: " + name)
-    bot.edit_message_text("✅ Модель: " + name, call.message.chat.id, call.message.message_id)
+    shown = DEFAULT_MODEL if name == 'auto' else name
+    label = "Авто (" + shown + ")" if name == 'auto' else shown
+    bot.answer_callback_query(call.id, "Модель: " + label)
+    bot.edit_message_text("✅ Модель: " + label, call.message.chat.id, call.message.message_id)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith('mode_'))
 def handle_mode(call):
@@ -211,10 +324,9 @@ def handle_file(message):
             )
 
         mode = user_modes.get(message.from_user.id, 'auto')
-        model_name = user_models.get(message.from_user.id, DEFAULT_MODEL)
-        model_id = MODELS.get(model_name, MODELS[DEFAULT_MODEL])
+        model_id = resolve_model(message.from_user.id)
 
-        bot.send_message(message.chat.id, "⏳ Распознаю текст (" + MODES[mode]['name'] + " / " + model_name + ")...")
+        bot.send_message(message.chat.id, "⏳ Распознаю текст (" + MODES[mode]['name'] + " / " + model_id + ")...")
 
         file_data = bot.download_file(file_info.file_path)
         result = recognize(file_data, mime_type, mode, model_id)
