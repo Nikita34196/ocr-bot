@@ -4,6 +4,7 @@ import os
 import io
 import json
 import re
+import time
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -105,9 +106,25 @@ def fetch_available_models():
 
 def pick_latest_flash(models):
     for name in models:
-        if 'flash' in name and 'lite' not in name:
+        if 'flash' in name and 'lite' not in name and 'customtools' not in name:
             return name
     return models[0] if models else FALLBACK_MODELS[0]
+
+def fallback_chain(preferred):
+    seen = set()
+    chain = []
+    for name in [preferred] + AVAILABLE_MODELS + FALLBACK_MODELS:
+        if not name or name in seen or 'customtools' in name:
+            continue
+        seen.add(name)
+        chain.append(name)
+    return chain
+
+class GeminiBusy(Exception):
+    def __init__(self, model_id, detail):
+        self.model_id = model_id
+        self.detail = detail
+        Exception.__init__(self, detail)
 
 AVAILABLE_MODELS = fetch_available_models()
 DEFAULT_MODEL = pick_latest_flash(AVAILABLE_MODELS)
@@ -284,7 +301,10 @@ def recognize(file_data, mime_type, mode, model_id):
         with urllib.request.urlopen(req, timeout=120) as resp:
             result = json.loads(resp.read().decode('utf-8'))
     except urllib.error.HTTPError as e:
-        raise Exception("HTTP " + str(e.code) + ": " + e.read().decode('utf-8')[:200])
+        body = e.read().decode('utf-8')
+        if e.code in (429, 503) or 'UNAVAILABLE' in body or 'high demand' in body.lower():
+            raise GeminiBusy(model_id, "HTTP " + str(e.code) + ": " + body[:200])
+        raise Exception("HTTP " + str(e.code) + ": " + body[:200])
 
     try:
         parts = result['candidates'][0]['content']['parts']
@@ -325,15 +345,31 @@ def handle_file(message):
 
         mode = user_modes.get(message.from_user.id, 'auto')
         model_id = resolve_model(message.from_user.id)
+        chain = fallback_chain(model_id)
 
         bot.send_message(message.chat.id, "⏳ Распознаю текст (" + MODES[mode]['name'] + " / " + model_id + ")...")
 
         file_data = bot.download_file(file_info.file_path)
-        result = recognize(file_data, mime_type, mode, model_id)
+        result = None
+        used_model = model_id
+        last_busy = None
+        for mid in chain[:8]:
+            try:
+                result = recognize(file_data, mime_type, mode, mid)
+                used_model = mid
+                break
+            except GeminiBusy as busy:
+                last_busy = busy
+                print('Модель занята, пробую другую:', mid)
+                time.sleep(1)
+                continue
 
         if not result:
             bot.send_message(message.chat.id, "⚠️ Не удалось распознать текст.")
             return
+
+        if used_model != model_id:
+            bot.send_message(message.chat.id, "↪️ " + model_id + " занята, распознал через " + used_model)
 
         send_result(message, result, orig_filename)
 
