@@ -4,25 +4,24 @@ import os
 import io
 import json
 import urllib.request
+import urllib.error
+import urllib.parse
 
-BOT_TOKEN      = os.environ['BOT_TOKEN']
-ADMIN_ID       = int(os.environ.get('ADMIN_ID', '0'))
-OPENROUTER_KEY = os.environ.get('OPENROUTER_KEY', '').strip()
+BOT_TOKEN  = os.environ['BOT_TOKEN']
+ADMIN_ID   = int(os.environ.get('ADMIN_ID', '0'))
+GEMINI_KEY = os.environ.get('GEMINI_KEY', '').strip()
 
 MODELS = {
-    'gemini-3.5-flash':  'google/gemini-3.5-flash',
-    'gemini-3.1-pro':    'google/gemini-3.1-pro-preview',
-    'gemini-3-pro':      'google/gemini-3-pro-preview',
-    'gemini-3-flash':    'google/gemini-3-flash-preview',
-    'gemini-2.5-pro':    'google/gemini-2.5-pro-preview',
-    'gemini-2.5-flash':  'google/gemini-2.5-flash-preview-04-17',
-    'gemini-2.0-flash':  'google/gemini-2.0-flash-001',
+    'gemini-2.5-flash': 'gemini-2.5-flash',
+    'gemini-2.5-pro':   'gemini-2.5-pro',
+    'gemini-2.0-flash': 'gemini-2.0-flash',
+    'gemini-1.5-flash': 'gemini-1.5-flash',
 }
-DEFAULT_MODEL = 'gemini-3.5-flash'
+DEFAULT_MODEL = 'gemini-2.5-flash'
 
 bot = telebot.TeleBot(BOT_TOKEN)
 bot.remove_webhook()
-print(f'OPENROUTER_KEY set: {bool(OPENROUTER_KEY)}, length: {len(OPENROUTER_KEY)}')
+print(f'GEMINI_KEY set: {bool(GEMINI_KEY)}, length: {len(GEMINI_KEY)}')
 
 MODES = {
     'auto': {
@@ -98,9 +97,9 @@ def show_status(message):
     if message.from_user.id != ADMIN_ID:
         bot.reply_to(message, "⛔️ Нет доступа.")
         return
-    key = OPENROUTER_KEY
-    masked = key[:12] + '...' + key[-4:] if len(key) > 16 else '❌ не задан'
-    bot.reply_to(message, "✅ Бот работает\nКлюч: " + masked)
+    key = GEMINI_KEY
+    masked = key[:8] + '...' + key[-4:] if len(key) > 12 else '❌ не задан'
+    bot.reply_to(message, "✅ Бот работает на Gemini\nКлюч: " + masked)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith('mdl_'))
 def handle_model(call):
@@ -147,38 +146,41 @@ def recognize(file_data, mime_type, mode, model_id):
     prompt = MODES[mode]['prompt']
 
     body = {
-        "model": model_id,
-        "max_tokens": 4096,
-        "messages": [{
-            "role": "user",
-            "content": [
-                {
-                    "type": "image_url",
-                    "image_url": {"url": "data:" + mime_type + ";base64," + file_b64}
-                },
-                {"type": "text", "text": prompt}
-            ]
-        }]
+        "contents": [{"parts": [
+            {"inline_data": {"mime_type": mime_type, "data": file_b64}},
+            {"text": prompt}
+        ]}],
+        "generationConfig": {"maxOutputTokens": 8192}
     }
 
+    query = urllib.parse.urlencode({'key': GEMINI_KEY})
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        + model_id
+        + ":generateContent?"
+        + query
+    )
     req = urllib.request.Request(
-        "https://openrouter.ai/api/v1/chat/completions",
+        url,
         data=json.dumps(body).encode('utf-8'),
-        headers={
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer ' + OPENROUTER_KEY,
-            'HTTP-Referer': 'https://github.com/Nikita34196/ocr-bot',
-            'X-Title': 'OCR Bot'
-        },
+        headers={'Content-Type': 'application/json'},
         method='POST'
     )
 
     try:
         with urllib.request.urlopen(req, timeout=120) as resp:
             result = json.loads(resp.read().decode('utf-8'))
-            return result['choices'][0]['message']['content'].strip()
     except urllib.error.HTTPError as e:
         raise Exception("HTTP " + str(e.code) + ": " + e.read().decode('utf-8')[:200])
+
+    try:
+        parts = result['candidates'][0]['content']['parts']
+        text = ''.join(p.get('text', '') for p in parts).strip()
+        return text
+    except (KeyError, IndexError):
+        candidate = result.get('candidates', [{}])[0]
+        finish_reason = candidate.get('finishReason', 'UNKNOWN')
+        raise Exception("Не удалось распознать (причина: " + str(finish_reason) + ")")
 
 @bot.message_handler(content_types=['photo', 'document'])
 def handle_file(message):
@@ -226,5 +228,5 @@ def handle_file(message):
     except Exception as e:
         bot.send_message(message.chat.id, "❌ Ошибка: " + str(e))
 
-print("Бот запущен на OpenRouter!")
+print("Бот запущен на Gemini!")
 bot.polling(none_stop=True, interval=1, timeout=30)
