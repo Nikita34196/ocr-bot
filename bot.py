@@ -364,6 +364,12 @@ def handle_file(message):
                 time.sleep(1)
                 continue
 
+        if result is None:
+            if last_busy:
+                raise last_busy
+            bot.send_message(message.chat.id, "⚠️ Не удалось распознать текст.")
+            return
+
         if not result:
             bot.send_message(message.chat.id, "⚠️ Не удалось распознать текст.")
             return
